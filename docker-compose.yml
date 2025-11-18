@@ -1,0 +1,244 @@
+# AI-First Wellness & Beauty Management Platform
+# Docker Compose for Local Development Environment
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database with TimescaleDB extension
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: wellness-ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wellness_ai
+      POSTGRES_USER: wellness_user
+      POSTGRES_PASSWORD: wellness_dev_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - wellness-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wellness_user -d wellness_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and message queuing
+  redis:
+    image: redis:7-alpine
+    container_name: wellness-ai-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_dev_password
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - wellness-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # MinIO - S3-compatible object storage for local development
+  minio:
+    image: minio/minio:latest
+    container_name: wellness-ai-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_admin
+      MINIO_ROOT_PASSWORD: minio_dev_password
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    networks:
+      - wellness-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ChromaDB - Vector database for AI embeddings
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: wellness-ai-chromadb
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    networks:
+      - wellness-network
+
+  # PGAdmin - Database management UI (optional, for development)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: wellness-ai-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@wellness-ai.local
+      PGADMIN_DEFAULT_PASSWORD: admin_dev_password
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - wellness-network
+    depends_on:
+      - postgres
+
+  # Redis Commander - Redis management UI (optional, for development)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: wellness-ai-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis_dev_password
+    ports:
+      - "8081:8081"
+    networks:
+      - wellness-network
+    depends_on:
+      - redis
+
+  # Mailhog - Email testing server (for development)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: wellness-ai-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - wellness-network
+
+  # TODO: Uncomment when backend is ready
+  # # FastAPI Backend
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: ../infrastructure/docker/Dockerfile.backend
+  #   container_name: wellness-ai-backend
+  #   restart: unless-stopped
+  #   environment:
+  #     DATABASE_URL: postgresql://wellness_user:wellness_dev_password@postgres:5432/wellness_ai
+  #     REDIS_URL: redis://:redis_dev_password@redis:6379
+  #     ENVIRONMENT: development
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - ./backend:/app
+  #   networks:
+  #     - wellness-network
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # TODO: Uncomment when frontend is ready
+  # # Next.js Frontend
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: ../infrastructure/docker/Dockerfile.frontend
+  #   container_name: wellness-ai-frontend
+  #   restart: unless-stopped
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://localhost:8000
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #     - /app/.next
+  #   networks:
+  #     - wellness-network
+  #   depends_on:
+  #     - backend
+  #   command: npm run dev
+
+  # TODO: Uncomment when Celery workers are ready
+  # # Celery Worker for background tasks
+  # celery-worker:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: ../infrastructure/docker/Dockerfile.backend
+  #   container_name: wellness-ai-celery-worker
+  #   restart: unless-stopped
+  #   environment:
+  #     DATABASE_URL: postgresql://wellness_user:wellness_dev_password@postgres:5432/wellness_ai
+  #     REDIS_URL: redis://:redis_dev_password@redis:6379
+  #     ENVIRONMENT: development
+  #   volumes:
+  #     - ./backend:/app
+  #   networks:
+  #     - wellness-network
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   command: celery -A app.worker worker --loglevel=info
+
+  # TODO: Uncomment when Celery beat is ready
+  # # Celery Beat for scheduled tasks
+  # celery-beat:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: ../infrastructure/docker/Dockerfile.backend
+  #   container_name: wellness-ai-celery-beat
+  #   restart: unless-stopped
+  #   environment:
+  #     DATABASE_URL: postgresql://wellness_user:wellness_dev_password@postgres:5432/wellness_ai
+  #     REDIS_URL: redis://:redis_dev_password@redis:6379
+  #     ENVIRONMENT: development
+  #   volumes:
+  #     - ./backend:/app
+  #   networks:
+  #     - wellness-network
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   command: celery -A app.worker beat --loglevel=info
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  chromadb_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  wellness-network:
+    driver: bridge
+
+# Development Services Quick Reference:
+# - PostgreSQL: localhost:5432 (wellness_ai / wellness_user / wellness_dev_password)
+# - Redis: localhost:6379 (password: redis_dev_password)
+# - MinIO API: localhost:9000 (minio_admin / minio_dev_password)
+# - MinIO Console: localhost:9001
+# - ChromaDB: localhost:8001
+# - PGAdmin: localhost:5050 (admin@wellness-ai.local / admin_dev_password)
+# - Redis Commander: localhost:8081
+# - MailHog SMTP: localhost:1025
+# - MailHog UI: localhost:8025
+# - Backend API: localhost:8000 (when uncommented)
+# - Frontend: localhost:3000 (when uncommented)
